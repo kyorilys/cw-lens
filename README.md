@@ -1,13 +1,40 @@
 # cw-lens 🔍
 
-Fast and intuitive query and exploration tool for AWS CloudWatch logs and metrics.
+Fast and simple search for AWS CloudWatch logs — built for checking **Email** and **IMS** logs without writing queries by hand.
 
-## Features
+## Setup
+1. Install Python 3.10+ (on Windows/Mac from python.org — it includes Tkinter), then `pip install -r requirements.txt`
+2. Make sure AWS credentials work (`aws configure` or `aws sso login`).
+   The user/role needs `logs:StartQuery`, `logs:GetQueryResults`, `logs:StopQuery`, `logs:DescribeLogGroups`.
+3. Edit `config.yaml`: set your region and the real log group names for `email` and `ims`.
+   Not sure of the names? Run `python cli.py groups` to list them.
 
-- **Query CloudWatch Logs Insights**: Run CloudWatch Insights queries with ease.
-- **Log Stream Inspection**: Quickly tail, filter, and search log events across log groups.
-- **Metric Exploration**: Query and visualize AWS CloudWatch metrics.
+## Desktop app (recommended)
+Run it directly: `python desktop.py`
 
-## Getting Started
+Or build a double-click app:
+- **Windows:** double-click `build_windows.bat` → `dist\CloudWatchLogSearch.exe`
+- **Mac:** run `./build_mac.sh` → `dist/CloudWatchLogSearch.app`
+- **GitHub:** push this folder to a repo; `.github/workflows/build-desktop.yml` builds both and
+  attaches them to the run under "Artifacts".
 
-*(Work in progress)*
+First time: choose **Email**, click **Log groups…**, tick your email log groups, then do the same for **IMS**.
+Your choices are saved in `~/.cloudwatch-log-search/config.yaml` (edit it to add saved queries).
+
+## Web app
+`streamlit run app.py` then open http://localhost:8501
+
+- **Simple search** – type an email address, ID, or keyword; pick a level and time range.
+- **Saved query** – one-click queries from `config.yaml` (`{term}` gets replaced by your search text).
+- **Advanced** – write any CloudWatch Logs Insights query.
+- Results can be downloaded as CSV.
+
+## Command line
+```
+python cli.py search email user@example.com --since "Last 24 hours"
+python cli.py search ims timeout --level ERROR
+python cli.py saved email "Recent errors / bounces"
+```
+
+## Adding another log source
+Add a new entry under `sources:` in `config.yaml` — it shows up in the app automatically.

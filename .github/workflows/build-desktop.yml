@@ -1,0 +1,33 @@
+# Builds the desktop app for Windows and macOS on every push (or manually).
+# Download the results from the run's "Artifacts" section on GitHub.
+name: Build desktop app
+on:
+  push:
+  workflow_dispatch:
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt pyinstaller
+      - run: python -m pytest -q tests
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        run: python -m PyInstaller --noconfirm --onefile --windowed --name CloudWatchLogSearch --add-data "config.yaml;." desktop.py
+      - name: Build (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          python -m PyInstaller --noconfirm --windowed --name CloudWatchLogSearch --add-data "config.yaml:." desktop.py
+          cd dist && zip -qry CloudWatchLogSearch-mac.zip CloudWatchLogSearch.app
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CloudWatchLogSearch-${{ runner.os }}
+          path: |
+            dist/CloudWatchLogSearch.exe
+            dist/CloudWatchLogSearch-mac.zip
