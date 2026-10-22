@@ -1,0 +1,45 @@
+# Edit this file to point at your own AWS log groups.
+# Find your log group names in the AWS console (CloudWatch > Log groups)
+# or run:  python cli.py groups --prefix /aws/
+
+region: us-east-1
+profile: null            # AWS CLI profile name, or null to use default credentials
+
+sources:
+  email:
+    label: Email
+    # TODO: replace with your real email log group(s), e.g. the Lambda that sends mail
+    log_groups:
+      - /aws/lambda/email-sender
+    saved_queries:
+      Recent errors / bounces: |
+        fields @timestamp, @message, @logStream
+        | filter @message like /(?i)(error|exception|bounce|complaint|reject|fail)/
+        | sort @timestamp desc
+      Find by recipient address: |
+        fields @timestamp, @message, @logStream
+        | filter @message like /(?i){term}/
+        | sort @timestamp desc
+      Emails sent per hour: |
+        filter @message like /(?i)sent/
+        | stats count(*) as sent by bin(1h)
+        | sort bin(1h) desc
+
+  ims:
+    label: IMS
+    # TODO: replace with your real IMS log group(s)
+    log_groups:
+      - /ecs/ims-service
+    saved_queries:
+      Recent errors: |
+        fields @timestamp, @message, @logStream
+        | filter @message like /(?i)(error|exception|fatal)/
+        | sort @timestamp desc
+      Find by ID / keyword: |
+        fields @timestamp, @message, @logStream
+        | filter @message like /(?i){term}/
+        | sort @timestamp desc
+      Error count per 5 min: |
+        filter @message like /(?i)error/
+        | stats count(*) as errors by bin(5m)
+        | sort bin(5m) desc
