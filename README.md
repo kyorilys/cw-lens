@@ -21,6 +21,17 @@ Or build a double-click app:
 First time: choose **Email**, click **Log groups…**, tick your email log groups, then do the same for **IMS**.
 Your choices are saved in `~/.cloudwatch-log-search/config.yaml` (edit it to add saved queries).
 
+## Email (SES) search
+The **Email (SES)** source reads the `aws-ses-event-logs` log group and shows
+Time, Event, Reason, From, To, CC, Subject and Message ID.
+
+- Type an email address, subject or message ID and press **Enter**. It matches anywhere
+  in the SES event, so BCC and every recipient are covered, not just the first "To".
+- **Show** narrows to *Problems only* (bounce, complaint, reject, delay), *Bounces*, *Delivered*, …
+- **Time → Custom dates…** searches an exact date range (your local time).
+- Saved queries: find by address, find by subject, bounces/complaints/rejects, delivery delays,
+  event counts per day.
+
 ## Web app
 `streamlit run app.py` then open http://localhost:8501
 

@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import csv
 import queue
-import shutil
 import sys
 import threading
 import tkinter as tk
@@ -15,6 +14,8 @@ import logquery as lq
 APP_NAME = "CloudWatch Log Search"
 USER_CONFIG = Path.home() / ".cloudwatch-log-search" / "config.yaml"
 CUSTOM = "Custom…"
+CUSTOM_DATES = "Custom dates…"
+WIDE_COLUMNS = {"@message": 600, "Timestamp": 185, "@timestamp": 185, "Event": 110, "Reason": 200, "Subject": 260, "From": 220, "To": 220, "CC": 200}
 
 # Background threads must not touch Tk widgets; they post callbacks here and
 # the UI thread runs them (see App.poll).
@@ -37,12 +38,16 @@ def bundled_path(name: str) -> Path:
     return base / name
 
 
-def config_path() -> Path:
-    """Keep the user's config in their home folder so it survives app updates."""
-    if not USER_CONFIG.exists():
-        USER_CONFIG.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy(bundled_path("config.yaml"), USER_CONFIG)
-    return USER_CONFIG
+def load_user_config() -> dict:
+    """The user's config lives in their home folder so it survives app updates.
+
+    On each start, new defaults shipped with the app (sources, saved queries)
+    are merged in without overwriting the user's own choices.
+    """
+    bundled = lq.load_config(bundled_path("config.yaml"))
+    cfg = lq.merge_defaults(lq.load_config(USER_CONFIG), bundled) if USER_CONFIG.exists() else bundled
+    lq.save_config(cfg, USER_CONFIG)
+    return cfg
 
 
 class LogGroupPicker(tk.Toplevel):
@@ -113,8 +118,9 @@ class App(tk.Tk):
         self.title(APP_NAME)
         self.geometry("1150x720")
         self.minsize(800, 500)
-        self.cfg_file = config_path()
-        self.cfg = lq.load_config(self.cfg_file)
+        self.cfg_file = USER_CONFIG
+        self.cfg = load_user_config()
+        self.adv_default = ""
         self.custom_groups: list[str] = []
         self.rows: list[dict] = []
         self.build()
@@ -134,7 +140,7 @@ class App(tk.Tk):
         self.profile = tk.StringVar(value=self.cfg["profile"] or "")
         self.labels = {v.get("label", k): k for k, v in self.cfg["sources"].items()}
         self.source = tk.StringVar(value=next(iter(self.labels), CUSTOM))
-        self.range = tk.StringVar(value="Last 1 hour")
+        self.range = tk.StringVar(value="Last 24 hours")
 
         def field(label, widget):
             ttk.Label(bar, text=label).pack(side="left", padx=(8, 2))
@@ -145,9 +151,21 @@ class App(tk.Tk):
         self.source.trace_add("write", lambda *_: self.on_source())
         ttk.Button(bar, text="Log groups…", command=self.pick_groups).pack(side="left", padx=4)
         field("Time:", ttk.Combobox(bar, textvariable=self.range, state="readonly", width=15,
-                                    values=list(lq.RANGES)))
+                                    values=list(lq.RANGES) + [CUSTOM_DATES]))
+        self.range.trace_add("write", lambda *_: self.on_range())
         field("Region:", ttk.Entry(bar, textvariable=self.region, width=12))
         field("AWS profile:", ttk.Entry(bar, textvariable=self.profile, width=14))
+
+        # Shown only when "Custom dates…" is chosen
+        self.dates = ttk.Frame(self, padding=(16, 0, 8, 4))
+        self.date_from, self.date_to = tk.StringVar(), tk.StringVar()
+        ttk.Label(self.dates, text="From:").pack(side="left")
+        ttk.Entry(self.dates, textvariable=self.date_from, width=17).pack(side="left", padx=4)
+        ttk.Label(self.dates, text="To:").pack(side="left", padx=(8, 0))
+        ttk.Entry(self.dates, textvariable=self.date_to, width=17).pack(side="left", padx=4)
+        ttk.Label(self.dates, foreground="gray",
+                  text="YYYY-MM-DD or YYYY-MM-DD HH:MM, your local time (To empty = now)").pack(side="left", padx=8)
+        self.bar = bar
 
         self.groups_label = ttk.Label(self, padding=(16, 0), foreground="gray")
         self.groups_label.pack(fill="x")
@@ -159,13 +177,14 @@ class App(tk.Tk):
         self.term = tk.StringVar()
         self.level = tk.StringVar(value="Any")
         self.limit = tk.IntVar(value=200)
-        ttk.Label(simple, text="Search (all words must match):").pack(side="left")
+        self.search_label = ttk.Label(simple, text="Search:")
+        self.search_label.pack(side="left")
         e = ttk.Entry(simple, textvariable=self.term, width=50)
         e.pack(side="left", padx=6, fill="x", expand=True)
         e.bind("<Return>", lambda _: self.run())
-        ttk.Label(simple, text="Level:").pack(side="left")
-        ttk.Combobox(simple, textvariable=self.level, state="readonly", width=7,
-                     values=list(lq.LEVEL_PATTERNS)).pack(side="left", padx=4)
+        ttk.Label(simple, text="Show:").pack(side="left")
+        self.level_box = ttk.Combobox(simple, textvariable=self.level, state="readonly", width=14)
+        self.level_box.pack(side="left", padx=4)
         ttk.Label(simple, text="Max rows:").pack(side="left")
         ttk.Spinbox(simple, from_=10, to=10000, increment=50, textvariable=self.limit,
                     width=7).pack(side="left", padx=4)
@@ -185,7 +204,6 @@ class App(tk.Tk):
 
         adv = ttk.Frame(self.tabs, padding=8)
         self.adv_text = tk.Text(adv, height=6, font=("Courier", 11), wrap="none")
-        self.adv_text.insert("1.0", lq.build_query())
         self.adv_text.pack(fill="x")
         self.tabs.add(adv, text="Advanced (Insights query)")
 
@@ -217,6 +235,21 @@ class App(tk.Tk):
     def source_key(self):
         return self.labels.get(self.source.get())
 
+    def source_cfg(self) -> dict:
+        key = self.source_key()
+        return self.cfg["sources"][key] if key else {}
+
+    def on_range(self):
+        if self.range.get() == CUSTOM_DATES:
+            self.dates.pack(fill="x", after=self.bar)
+        else:
+            self.dates.pack_forget()
+
+    def time_window(self):
+        if self.range.get() == CUSTOM_DATES:
+            return lq.custom_window(self.date_from.get(), self.date_to.get())
+        return lq.time_window(self.range.get())
+
     def log_groups(self) -> list[str]:
         key = self.source_key()
         return self.cfg["sources"][key].get("log_groups", []) if key else self.custom_groups
@@ -226,6 +259,17 @@ class App(tk.Tk):
         saved = list(self.cfg["sources"][key].get("saved_queries", {})) if key else []
         self.saved_box["values"] = saved
         self.saved_name.set(saved[0] if saved else "")
+        src = self.source_cfg()
+        hint = src.get("search_hint", "any words")
+        self.search_label.config(text=f"Search ({hint}):")
+        self.level_box["values"] = list(lq.levels_for(src))
+        self.level.set("Any")
+        # Refresh the Advanced box unless the user has edited it
+        current = self.adv_text.get("1.0", "end").strip()
+        if current in ("", self.adv_default):
+            self.adv_default = lq.build_query(source=src)
+            self.adv_text.delete("1.0", "end")
+            self.adv_text.insert("1.0", self.adv_default)
         groups = self.log_groups()
         self.groups_label.config(
             text="Log groups: " + (", ".join(groups) if groups else "none — click “Log groups…”"))
@@ -255,13 +299,15 @@ class App(tk.Tk):
     def current_query(self) -> str:
         tab = self.tabs.index(self.tabs.select())
         if tab == 0:
-            return lq.build_query(self.term.get(), self.level.get(), int(self.limit.get()))
+            return lq.build_query(self.term.get(), self.level.get(), int(self.limit.get()),
+                                  self.source_cfg())
         if tab == 1:
             key = self.source_key()
             saved = self.cfg["sources"][key].get("saved_queries", {}) if key else {}
             if self.saved_name.get() not in saved:
                 raise ValueError("No saved query selected.")
-            return lq.fill_template(saved[self.saved_name.get()], self.saved_term.get())
+            return lq.fill_template(saved[self.saved_name.get()], self.saved_term.get(),
+                                    self.source_cfg())
         return self.adv_text.get("1.0", "end").strip()
 
     def show_query(self):
@@ -278,10 +324,10 @@ class App(tk.Tk):
             if not groups:
                 raise ValueError("Pick some log groups first (click “Log groups…”).")
             client = self.client()
+            start, end = self.time_window()
         except Exception as e:
             messagebox.showwarning(APP_NAME, str(e))
             return
-        start, end = lq.time_window(self.range.get())
         self.run_btn.state(["disabled"])
         self.status.config(text="Querying CloudWatch…")
 
@@ -302,9 +348,8 @@ class App(tk.Tk):
         self.tree.delete(*self.tree.get_children())
         self.tree["columns"] = cols
         for c in cols:
-            wide = c == "@message"
             self.tree.heading(c, text=c)
-            self.tree.column(c, width=750 if wide else 210, stretch=wide)
+            self.tree.column(c, width=WIDE_COLUMNS.get(c, 170), stretch=c == "@message")
         for i, r in enumerate(rows):
             vals = [str(r.get(c, "")).replace("\n", " ")[:2000] for c in cols]
             self.tree.insert("", "end", iid=str(i), values=vals)
