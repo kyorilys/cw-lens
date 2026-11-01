@@ -7,23 +7,55 @@ profile: null            # AWS CLI profile name, or null to use default credenti
 
 sources:
   email:
-    label: Email
-    # TODO: replace with your real email log group(s), e.g. the Lambda that sends mail
+    label: Email (SES)
+    # Amazon SES event log group (from the console "SES Search Logs" query)
     log_groups:
-      - /aws/lambda/email-sender
+      - aws-ses-event-logs
+    search_hint: email address, subject or message ID
+    # Friendly columns for SES events. Searches match anywhere in the raw
+    # event, so they also catch BCC and every recipient, not just the first.
+    base_query: |
+      fields @timestamp as Timestamp, eventType as Event,
+        coalesce(bounce.bounceSubType, deliveryDelay.delayType) as Reason,
+        mail.source as From, mail.commonHeaders.to.0 as To,
+        mail.commonHeaders.subject as Subject, mail.messageId as MessageId
+      | parse @message /(?<CC>(?<="name":"Cc","value":").+?(?="))/
+    display: Timestamp, Event, Reason, From, To, CC, Subject, MessageId, @logStream, @message
+    sort_by: Timestamp
+    # Choices in the "Level" box for this source
+    levels:
+      Problems only: Event in ["Bounce", "Complaint", "Reject", "Rendering Failure", "DeliveryDelay"]
+      Bounces: Event = "Bounce"
+      Complaints: Event = "Complaint"
+      Delivered: Event = "Delivery"
+      Sent: Event = "Send"
     saved_queries:
-      Recent errors / bounces: |
-        fields @timestamp, @message, @logStream
-        | filter @message like /(?i)(error|exception|bounce|complaint|reject|fail)/
-        | sort @timestamp desc
-      Find by recipient address: |
-        fields @timestamp, @message, @logStream
+      Find by email address (To / CC / BCC / From): |
+        {base}
         | filter @message like /(?i){term}/
-        | sort @timestamp desc
-      Emails sent per hour: |
-        filter @message like /(?i)sent/
-        | stats count(*) as sent by bin(1h)
-        | sort bin(1h) desc
+        | display {display}
+        | sort Timestamp desc
+        | limit 10000
+      Find by subject: |
+        {base}
+        | filter Subject like /(?i){term}/
+        | display {display}
+        | sort Timestamp desc
+        | limit 10000
+      Bounces, complaints & rejects: |
+        {base}
+        | filter Event in ["Bounce", "Complaint", "Reject", "Rendering Failure"]
+        | display {display}
+        | sort Timestamp desc
+        | limit 10000
+      Delivery delays: |
+        {base}
+        | filter Event = "DeliveryDelay"
+        | display {display}
+        | sort Timestamp desc
+        | limit 10000
+      Event counts per day: |
+        stats count(*) as Count by eventType, bin(1d)
 
   ims:
     label: IMS

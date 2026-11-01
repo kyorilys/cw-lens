@@ -19,13 +19,16 @@ with st.sidebar:
     if source_key == "custom":
         groups_text = st.text_area("Log groups (one per line)")
         log_groups = [g.strip() for g in groups_text.splitlines() if g.strip()]
-        saved = {}
+        source, saved = {}, {}
     else:
         source = cfg["sources"][source_key]
         log_groups = source.get("log_groups", [])
         saved = source.get("saved_queries", {})
         st.caption("Log groups: " + ", ".join(log_groups))
-    range_label = st.selectbox("Time range", list(lq.RANGES), index=1)
+    range_label = st.selectbox("Time range", list(lq.RANGES) + ["Custom dates"], index=3)
+    if range_label == "Custom dates":
+        date_from = st.text_input("From (YYYY-MM-DD [HH:MM], local)")
+        date_to = st.text_input("To (empty = now)")
 
 st.title(f"🔎 {names.get(source_key, 'Custom')} logs")
 
@@ -35,11 +38,11 @@ query = None
 try:
     if mode == "Simple search":
         c1, c2, c3 = st.columns([4, 1, 1])
-        term = c1.text_input("Search text (all words must match)",
+        term = c1.text_input(f"Search ({source.get('search_hint', 'any words')})",
                              placeholder="e.g. user@example.com or order 12345")
-        level = c2.selectbox("Level", list(lq.LEVEL_PATTERNS))
+        level = c2.selectbox("Show", list(lq.levels_for(source)))
         limit = c3.number_input("Max rows", 10, 10000, 200, step=50)
-        query = lq.build_query(term, level, limit)
+        query = lq.build_query(term, level, limit, source)
     elif mode == "Saved query":
         if not saved:
             st.info("No saved queries for this source. Add some in config.yaml.")
@@ -48,9 +51,9 @@ try:
             needs_term = "{term}" in saved[name]
             term = st.text_input("Search term") if needs_term else ""
             if not needs_term or term:
-                query = lq.fill_template(saved[name], term)
+                query = lq.fill_template(saved[name], term, source)
     else:
-        query = st.text_area("Logs Insights query", lq.build_query(), height=180)
+        query = st.text_area("Logs Insights query", lq.build_query(source=source), height=180)
 except ValueError as e:
     st.warning(str(e))
 
@@ -59,8 +62,11 @@ if query:
         st.code(query, language="sql")
 
 if st.button("Run", type="primary", disabled=not query):
-    start, end = lq.time_window(range_label)
     try:
+        if range_label == "Custom dates":
+            start, end = lq.custom_window(date_from, date_to)
+        else:
+            start, end = lq.time_window(range_label)
         client = lq.make_client(region, profile or None)
         with st.spinner("Querying CloudWatch…"):
             rows = lq.run_query(client, log_groups, query, start, end)

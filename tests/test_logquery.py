@@ -73,3 +73,61 @@ def test_run_query_failed():
 def test_run_query_requires_groups():
     with pytest.raises(ValueError):
         lq.run_query(MagicMock(), [], "q", None, None)
+
+
+def test_email_source_query_uses_friendly_columns():
+    email = lq.load_config(ROOT / "config.yaml")["sources"]["email"]
+    assert email["log_groups"] == ["aws-ses-event-logs"]
+    q = lq.build_query("jane@example.com", "Problems only", 100, email)
+    assert q.startswith("fields @timestamp as Timestamp")
+    assert r"| filter @message like /(?i)jane@example\.com/" in q
+    assert '| filter Event in ["Bounce"' in q
+    assert "| display Timestamp, Event" in q
+    assert "| sort Timestamp desc" in q
+
+
+def test_saved_query_fills_base_and_display():
+    email = lq.load_config(ROOT / "config.yaml")["sources"]["email"]
+    q = lq.fill_template(email["saved_queries"]["Find by subject"], "Invoice", email)
+    assert "{" not in q.replace("{term}", "")  # no unfilled placeholders
+    assert "fields @timestamp as Timestamp" in q and "/(?i)Invoice/" in q
+
+
+def test_levels_for_defaults_and_custom():
+    assert list(lq.levels_for()) == ["Any", "ERROR", "WARN+"]
+    assert "Bounces" in lq.levels_for({"levels": {"Bounces": 'Event = "Bounce"'}})
+
+
+def test_merge_defaults_replaces_placeholders_keeps_user_choices():
+    bundled = lq.load_config(ROOT / "config.yaml")
+    user = {"region": "ap-southeast-1", "sources": {
+        "email": {"label": "Email", "log_groups": ["/aws/lambda/email-sender"],
+                  "saved_queries": {"Old": "x"}},
+        "ims": {"label": "IMS", "log_groups": ["/ecs/my-real-ims"],
+                "saved_queries": {"Mine": "y"}},
+    }}
+    out = lq.merge_defaults(user, bundled)
+    assert out["region"] == "ap-southeast-1"
+    assert out["sources"]["email"]["log_groups"] == ["aws-ses-event-logs"]
+    assert "Old" not in out["sources"]["email"]["saved_queries"]
+    ims = out["sources"]["ims"]
+    assert ims["log_groups"] == ["/ecs/my-real-ims"]
+    assert "Mine" in ims["saved_queries"] and "Recent errors" in ims["saved_queries"]
+
+
+def test_save_config_round_trip(tmp_path):
+    cfg = lq.load_config(ROOT / "config.yaml")
+    lq.save_config(cfg, tmp_path / "c.yaml")
+    assert lq.load_config(tmp_path / "c.yaml") == cfg
+    assert "base_query: |" in (tmp_path / "c.yaml").read_text()
+
+
+def test_custom_window():
+    start, end = lq.custom_window("2026-06-09", "2026-06-13")
+    assert (end - start).total_seconds() == 5 * 86400 - 1
+    start, end = lq.custom_window("2026-06-09 16:00", "2026-06-09 17:30")
+    assert (end - start).total_seconds() == 90 * 60
+    with pytest.raises(ValueError):
+        lq.custom_window("2026-06-13", "2026-06-09")
+    with pytest.raises(ValueError):
+        lq.custom_window("13/06/2026", "")
