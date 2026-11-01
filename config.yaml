@@ -59,9 +59,8 @@ sources:
 
   ims:
     label: IMS
-    # TODO: replace with your real IMS log group(s)
-    log_groups:
-      - /ecs/ims-service
+    # Not set yet: the app asks you to pick IMS log groups the first time.
+    log_groups: []
     saved_queries:
       Recent errors: |
         fields @timestamp, @message, @logStream

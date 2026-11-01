@@ -1,7 +1,7 @@
 @echo off
-REM Builds dist\CloudWatchLogSearch.exe  (run on a Windows PC with Python 3.10+ installed)
+REM Builds dist\cw-lens.exe  (run on a Windows PC with Python 3.10+ installed)
 python -m pip install -r requirements.txt pyinstaller
-python -m PyInstaller --noconfirm --onefile --windowed --name CloudWatchLogSearch --add-data "config.yaml;." desktop.py
+python -m PyInstaller --noconfirm --onefile --windowed --name cw-lens --add-data "config.yaml;." --add-data "ui;ui" webapp.py
 echo.
-echo Done: dist\CloudWatchLogSearch.exe
+echo Done: dist\cw-lens.exe
 pause

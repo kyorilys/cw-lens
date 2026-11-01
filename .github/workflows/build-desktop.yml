@@ -1,4 +1,5 @@
-# Builds the desktop app for Windows and macOS on every push (or manually).
+# Builds the desktop app for Windows and macOS on every push (or manually),
+# opens each build once to check the window loads, and uploads it.
 # Download the results from the run's "Artifacts" section on GitHub.
 name: Build desktop app
 on:
@@ -7,6 +8,7 @@ on:
 jobs:
   build:
     strategy:
+      fail-fast: false
       matrix:
         os: [windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
@@ -17,17 +19,38 @@ jobs:
           python-version: "3.12"
       - run: pip install -r requirements.txt pyinstaller
       - run: python -m pytest -q tests
+
       - name: Build (Windows)
         if: runner.os == 'Windows'
-        run: python -m PyInstaller --noconfirm --onefile --windowed --name CloudWatchLogSearch --add-data "config.yaml;." desktop.py
+        run: python -m PyInstaller --noconfirm --onefile --windowed --name cw-lens --add-data "config.yaml;." --add-data "ui;ui" webapp.py
+      - name: Self-test (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath "dist\cw-lens.exe" -ArgumentList "--selftest", "$PWD\selftest.txt" -PassThru
+          if (-not $p.WaitForExit(180000)) { $p.Kill(); throw "app did not exit in time" }
+          Get-Content selftest.txt
+          if (-not (Select-String -Path selftest.txt -Pattern '^OK' -Quiet)) { throw "self-test failed" }
+
       - name: Build (macOS)
         if: runner.os == 'macOS'
+        run: python -m PyInstaller --noconfirm --windowed --name cw-lens --add-data "config.yaml:." --add-data "ui:ui" webapp.py
+      - name: Self-test (macOS)
+        if: runner.os == 'macOS'
         run: |
-          python -m PyInstaller --noconfirm --windowed --name CloudWatchLogSearch --add-data "config.yaml:." desktop.py
-          cd dist && zip -qry CloudWatchLogSearch-mac.zip CloudWatchLogSearch.app
+          ./dist/cw-lens.app/Contents/MacOS/cw-lens --selftest "$PWD/selftest.txt" &
+          pid=$!
+          for i in $(seq 1 180); do kill -0 $pid 2>/dev/null || break; sleep 1; done
+          kill $pid 2>/dev/null || true
+          cat selftest.txt
+          grep -q '^OK' selftest.txt
+      - name: Zip (macOS)
+        if: runner.os == 'macOS'
+        run: cd dist && zip -qry cw-lens-mac.zip cw-lens.app
+
       - uses: actions/upload-artifact@v4
         with:
-          name: CloudWatchLogSearch-${{ runner.os }}
+          name: cw-lens-${{ runner.os }}
           path: |
-            dist/CloudWatchLogSearch.exe
-            dist/CloudWatchLogSearch-mac.zip
+            dist/cw-lens.exe
+            dist/cw-lens-mac.zip

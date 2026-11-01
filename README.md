@@ -10,16 +10,23 @@ Fast and simple search for AWS CloudWatch logs — built for checking **Email** 
    Not sure of the names? Run `python cli.py groups` to list them.
 
 ## Desktop app (recommended)
-Run it directly: `python desktop.py`
+A modern window with a sidebar for **Email** and **IMS**, a big search bar, coloured event badges,
+a details panel for each log line, and light/dark themes.
+
+Run it directly: `python webapp.py`
 
 Or build a double-click app:
-- **Windows:** double-click `build_windows.bat` → `dist\CloudWatchLogSearch.exe`
-- **Mac:** run `./build_mac.sh` → `dist/CloudWatchLogSearch.app`
-- **GitHub:** push this folder to a repo; `.github/workflows/build-desktop.yml` builds both and
-  attaches them to the run under "Artifacts".
+- **Windows:** double-click `build_windows.bat` → `dist\cw-lens.exe` (uses Edge WebView2, built into Windows 10/11)
+- **Mac:** run `./build_mac.sh` → `dist/cw-lens.app`
+- **GitHub:** every push builds both (see the run's "Artifacts").
 
-First time: choose **Email**, click **Log groups…**, tick your email log groups, then do the same for **IMS**.
-Your choices are saved in `~/.cloudwatch-log-search/config.yaml` (edit it to add saved queries).
+First time: pick **IMS** in the sidebar and choose its log groups. Email is preset to `aws-ses-event-logs`.
+Your choices are saved in `~/.cloudwatch-log-search/config.yaml` (edit it to add saved searches).
+
+Tips: press `/` to jump to the search box, `↑`/`↓` to move between results, `Esc` to close panels.
+Click **Query** to see or edit the exact CloudWatch Logs Insights query.
+
+The older plain window is still available: `python desktop.py`.
 
 ## Email (SES) search
 The **Email (SES)** source reads the `aws-ses-event-logs` log group and shows

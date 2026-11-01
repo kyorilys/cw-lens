@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+import sys
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -25,6 +26,9 @@ DEFAULT_LEVELS = {
     "ERROR": "@message like /(?i)(error|exception|fatal)/",
     "WARN+": "@message like /(?i)(warn|error|exception|fatal)/",
 }
+
+# Each user's settings live in their home folder so they survive app updates.
+USER_CONFIG = Path.home() / ".cloudwatch-log-search" / "config.yaml"
 
 # Placeholder log groups shipped in the first version of config.yaml.
 OLD_PLACEHOLDERS = {"email": ["/aws/lambda/email-sender"], "ims": ["/ecs/ims-service"]}
@@ -78,6 +82,43 @@ def merge_defaults(user: dict, bundled: dict) -> dict:
             else:
                 mine.setdefault(k, v)
     return user
+
+
+def bundled_path(name: str) -> Path:
+    """Path to a file shipped with the app (works inside a PyInstaller bundle)."""
+    base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+    return base / name
+
+
+def load_user_config(path: str | Path | None = None) -> dict:
+    """Load the user's config, merging in new defaults shipped with the app."""
+    path = Path(path or USER_CONFIG)
+    bundled = load_config(bundled_path("config.yaml"))
+    cfg = merge_defaults(load_config(path), bundled) if path.exists() else bundled
+    save_config(cfg, path)
+    return cfg
+
+
+def friendly_error(err: Exception) -> str:
+    """Turn common AWS errors into a message a person can act on."""
+    name = type(err).__name__
+    text = str(err)
+    code = getattr(err, "response", {}).get("Error", {}).get("Code", "") if hasattr(err, "response") else ""
+    if name in ("NoCredentialsError", "PartialCredentialsError"):
+        return "No AWS login found. Run `aws configure` or `aws sso login`, then try again."
+    if name in ("ProfileNotFound",):
+        return f"{text}. Check the AWS profile name in Settings."
+    if name in ("SSOTokenLoadError", "UnauthorizedSSOTokenError", "TokenRetrievalError") or code in (
+            "ExpiredToken", "ExpiredTokenException", "UnrecognizedClientException"):
+        return "Your AWS login has expired. Run `aws sso login` (or refresh your keys), then try again."
+    if code in ("AccessDeniedException", "AccessDenied"):
+        return "AWS says you don't have permission for this. You need logs:StartQuery, " \
+               "logs:GetQueryResults and logs:DescribeLogGroups.\n\n" + text
+    if code == "ResourceNotFoundException":
+        return "A log group wasn't found in this region. Check the region in Settings and the log groups.\n\n" + text
+    if code == "MalformedQueryException":
+        return "CloudWatch couldn't read the query.\n\n" + text
+    return f"{name}: {text}" if text else name
 
 
 def levels_for(source: dict | None = None) -> dict:
@@ -137,7 +178,7 @@ def parse_local(text: str, end_of_day: bool = False) -> datetime:
     A bare date used as an end time means the end of that day.
     """
     text = text.strip()
-    for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d"):
+    for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M", "%Y-%m-%d"):
         try:
             dt = datetime.strptime(text, fmt)
         except ValueError:

@@ -3,16 +3,14 @@ from __future__ import annotations
 
 import csv
 import queue
-import sys
 import threading
 import tkinter as tk
-from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 import logquery as lq
 
 APP_NAME = "CloudWatch Log Search"
-USER_CONFIG = Path.home() / ".cloudwatch-log-search" / "config.yaml"
+USER_CONFIG = lq.USER_CONFIG
 CUSTOM = "Custom…"
 CUSTOM_DATES = "Custom dates…"
 WIDE_COLUMNS = {"@message": 600, "Timestamp": 185, "@timestamp": 185, "Event": 110, "Reason": 200, "Subject": 260, "From": 220, "To": 220, "CC": 200}
@@ -33,21 +31,8 @@ def in_background(work, on_done):
     threading.Thread(target=run, daemon=True).start()
 
 
-def bundled_path(name: str) -> Path:
-    base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
-    return base / name
-
-
 def load_user_config() -> dict:
-    """The user's config lives in their home folder so it survives app updates.
-
-    On each start, new defaults shipped with the app (sources, saved queries)
-    are merged in without overwriting the user's own choices.
-    """
-    bundled = lq.load_config(bundled_path("config.yaml"))
-    cfg = lq.merge_defaults(lq.load_config(USER_CONFIG), bundled) if USER_CONFIG.exists() else bundled
-    lq.save_config(cfg, USER_CONFIG)
-    return cfg
+    return lq.load_user_config(USER_CONFIG)
 
 
 class LogGroupPicker(tk.Toplevel):
