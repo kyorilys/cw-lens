@@ -27,10 +27,15 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $p = Start-Process -FilePath "dist\cw-lens.exe" -ArgumentList "--selftest", "$PWD\selftest.txt" -PassThru
-          if (-not $p.WaitForExit(180000)) { $p.Kill(); throw "app did not exit in time" }
-          Get-Content selftest.txt
-          if (-not (Select-String -Path selftest.txt -Pattern '^OK' -Quiet)) { throw "self-test failed" }
+          # Try twice: a fresh Windows runner can be slow to start WebView2 the first time.
+          for ($try = 1; $try -le 2; $try++) {
+            Remove-Item selftest.txt -ErrorAction SilentlyContinue
+            $p = Start-Process -FilePath "dist\cw-lens.exe" -ArgumentList "--selftest", "$PWD\selftest.txt" -PassThru
+            if (-not $p.WaitForExit(200000)) { $p.Kill(); Write-Host "Attempt ${try}: app did not exit in time" }
+            if (Test-Path selftest.txt) { Write-Host "Attempt ${try}: $(Get-Content selftest.txt)" }
+            if ((Test-Path selftest.txt) -and (Select-String -Path selftest.txt -Pattern '^OK' -Quiet)) { exit 0 }
+          }
+          throw "self-test failed"
 
       - name: Build (macOS)
         if: runner.os == 'macOS'

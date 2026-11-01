@@ -169,7 +169,22 @@ class Api:
 
 
 def selftest(window, out_path: str):
-    """Used by CI: wait for the UI to render, record what it shows, then quit."""
+    """Used by CI: wait for the UI to render, record what it shows, then quit.
+
+    The process always ends: a watchdog stops it if anything hangs, so a slow
+    CI machine gives a clear FAIL instead of a stuck job.
+    """
+    import os
+    import threading
+
+    def watchdog():
+        time.sleep(150)
+        out = Path(out_path)
+        if not out.exists():
+            out.write_text("FAIL: timed out before the UI answered")
+        os._exit(2)
+
+    threading.Thread(target=watchdog, daemon=True).start()
     result = "FAIL: UI did not load"
     for _ in range(90):
         try:
@@ -182,6 +197,8 @@ def selftest(window, out_path: str):
         time.sleep(0.5)
     Path(out_path).write_text(result)
     window.destroy()
+    time.sleep(10)  # normally the app has exited by now; if closing the window hung, force it
+    os._exit(0 if result.startswith("OK") else 1)
 
 
 def main(argv: list[str]) -> int:
