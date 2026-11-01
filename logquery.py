@@ -18,7 +18,7 @@ RANGES = {
     "Last 30 days": timedelta(days=30),
 }
 
-DEFAULT_BASE = "fields @timestamp, @message, @logStream"
+DEFAULT_BASE = "fields @timestamp, @message, @logStream, @log"
 
 # Filter conditions offered in the "Level" box. A source can replace these
 # with its own (e.g. SES event types) via `levels:` in config.yaml.
@@ -36,6 +36,7 @@ OLD_PLACEHOLDERS = {"email": ["/aws/lambda/email-sender"], "ims": ["/ecs/ims-ser
 # Saved queries shipped in earlier versions. If a user's copy is still exactly
 # one of these (never edited), it's safe to replace or drop it on upgrade.
 OLD_DEFAULT_QUERIES = {
+    '{base}\n| filter @message like /Traceback \\(most recent call last\\)|\\b[A-Za-z]+(Error|Exception): /\n| display {display}\n| sort Timestamp desc\n| limit 1000',
     'fields @timestamp, @message, @logStream\n| filter @message like /(?i)(error|exception|bounce|complaint|reject|fail)/\n| sort @timestamp desc',
     'fields @timestamp, @message, @logStream\n| filter @message like /(?i){term}/\n| sort @timestamp desc',
     'filter @message like /(?i)sent/\n| stats count(*) as sent by bin(1h)\n| sort bin(1h) desc',
@@ -72,6 +73,13 @@ def save_config(cfg: dict, path: str | Path) -> None:
         yaml.dump(cfg, f, Dumper=_Dumper, sort_keys=False, allow_unicode=True)
 
 
+# Earlier shipped values of other per-source settings; unedited copies are upgraded.
+OLD_DEFAULT_VALUES = {
+    "base_query": {'fields @timestamp as Timestamp, @logStream as Stream\n| parse @message /^\\[(?<LogTime>[^\\]]+?): (?<Level>[A-Z]+)\\/(?<Process>[^\\]]+)\\] (?<Msg>.*)/\n| fields coalesce(Msg, @message) as Message', 'fields @timestamp as Timestamp, eventType as Event,\n  coalesce(bounce.bounceSubType, deliveryDelay.delayType) as Reason,\n  mail.source as From, mail.commonHeaders.to.0 as To,\n  mail.commonHeaders.subject as Subject, mail.messageId as MessageId\n| parse @message /(?<CC>(?<="name":"Cc","value":").+?(?="))/'},
+    "display": {'Timestamp, Level, Process, Message, Stream, @message', 'Timestamp, Event, Reason, From, To, CC, Subject, MessageId, @logStream, @message'},
+}
+
+
 def merge_defaults(user: dict, bundled: dict) -> dict:
     """Bring a user's saved config up to date with the app's bundled defaults.
 
@@ -93,6 +101,8 @@ def merge_defaults(user: dict, bundled: dict) -> dict:
             if k == "saved_queries":
                 for name, q in v.items():
                     saved.setdefault(name, q)
+            elif k in OLD_DEFAULT_VALUES and str(mine.get(k, "")).strip() in OLD_DEFAULT_VALUES[k]:
+                mine[k] = v
             else:
                 mine.setdefault(k, v)
     return user
@@ -127,7 +137,7 @@ def friendly_error(err: Exception) -> str:
         return "Your AWS login has expired. Run `aws sso login` (or refresh your keys), then try again."
     if code in ("AccessDeniedException", "AccessDenied"):
         return "AWS says you don't have permission for this. You need logs:StartQuery, " \
-               "logs:GetQueryResults and logs:DescribeLogGroups.\n\n" + text
+               "logs:GetQueryResults, logs:GetLogEvents and logs:DescribeLogGroups.\n\n" + text
     if code == "ResourceNotFoundException":
         return "A log group wasn't found in this region. Check the region in Settings and the log groups.\n\n" + text
     if code == "MalformedQueryException":
@@ -175,7 +185,7 @@ def fill_template(query: str, term: str, source: dict | None = None) -> str:
     """
     source = source or {}
     query = query.replace("{base}", source.get("base_query", DEFAULT_BASE).strip())
-    query = query.replace("{display}", source.get("display", "@timestamp, @message, @logStream"))
+    query = query.replace("{display}", source.get("display", "@timestamp, @message, @logStream, @log"))
     if "{term}" in query and not term.strip():
         raise ValueError("This saved query needs a search term.")
     return query.replace("{term}", escape_regex(term.strip()))
@@ -246,6 +256,48 @@ def run_query(client, log_groups: list[str], query: str, start: datetime, end: d
         {f["field"]: f["value"] for f in row if f["field"] != "@ptr"}
         for row in result["results"]
     ]
+
+
+def parse_insights_time(value: str) -> datetime:
+    """Parse an Insights timestamp like '2026-11-01 09:10:02.551' (always UTC)."""
+    value = value.strip().replace("T", " ").rstrip("Z")
+    for fmt in ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S"):
+        try:
+            return datetime.strptime(value, fmt).replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+    raise ValueError(f"Can't read timestamp '{value}'.")
+
+
+def log_group_from_row(row: dict, fallback_groups: list[str]) -> str | None:
+    """Which log group a result row came from.
+
+    Insights' @log field looks like '123456789012:/ecs/ims-api'. Without it,
+    we can only be sure when the search covered a single log group.
+    """
+    log = row.get("@log", "")
+    if ":" in log:
+        return log.split(":", 1)[1]
+    return fallback_groups[0] if len(fallback_groups) == 1 else None
+
+
+def get_context(client, log_group: str, stream: str, at: datetime,
+                before_s: float = 5, after_s: float = 15, limit: int = 200) -> list[dict]:
+    """Lines logged just before and after a moment in one log stream.
+
+    Python tracebacks are usually split into one CloudWatch event per line,
+    so this is how to see a whole traceback around an error line.
+    """
+    ts = int(at.timestamp() * 1000)
+    resp = client.get_log_events(
+        logGroupName=log_group, logStreamName=stream,
+        startTime=ts - int(before_s * 1000), endTime=ts + int(after_s * 1000),
+        startFromHead=True, limit=limit,
+    )
+    return [{"time": datetime.fromtimestamp(e["timestamp"] / 1000, timezone.utc)
+                     .strftime("%Y-%m-%d %H:%M:%S.%f")[:-3],
+             "message": e["message"].rstrip("\n")}
+            for e in resp.get("events", [])]
 
 
 def list_log_groups(client, prefix: str = "", max_items: int = 500) -> list[str]:

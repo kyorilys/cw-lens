@@ -75,3 +75,12 @@ def test_set_log_groups_and_settings_persist(tmp_path, monkeypatch):
     assert cfg["sources"]["ims"]["log_groups"] == ["/ecs/a", "/ecs/b"]
     assert cfg["region"] == "ap-southeast-1" and cfg["profile"] == "dev"
     assert webapp.CUSTOM not in cfg["sources"]
+
+
+def test_context_uses_row_log_group(tmp_path, monkeypatch):
+    api, fake = make_api(tmp_path, monkeypatch)
+    fake.get_log_events.return_value = {"events": [{"timestamp": 1793500000000, "message": "x"}]}
+    res = api.context("ims", {"Timestamp": "2026-11-01 09:10:02.551", "Stream": "web/1", "@log": "1:/ecs/ims-api"})
+    assert res["group"] == "/ecs/ims-api" and res["lines"][0]["message"] == "x"
+    assert "no log stream" in api.context("ims", {"Timestamp": "2026-11-01 09:10:02"})["error"]
+    assert "which log group" in api.context("ims", {"Timestamp": "2026-11-01 09:10:02", "Stream": "s"})["error"]

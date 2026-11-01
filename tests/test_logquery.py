@@ -179,3 +179,47 @@ def test_merge_upgrades_untouched_old_ims_queries():
     assert "Level in" in ims["saved_queries"]["Recent errors"]         # replaced by new version
     assert ims["saved_queries"]["My own"] == "fields @message"         # user's own kept
     assert "base_query" in ims and "Errors" in ims["levels"]
+
+
+def test_get_context_and_helpers():
+    from datetime import datetime, timezone
+    from unittest.mock import MagicMock
+    at = lq.parse_insights_time("2026-11-01 09:10:02.551")
+    assert at == datetime(2026, 11, 1, 9, 10, 2, 551000, tzinfo=timezone.utc)
+    assert lq.log_group_from_row({"@log": "123456789012:/ecs/ims-api"}, ["a", "b"]) == "/ecs/ims-api"
+    assert lq.log_group_from_row({}, ["/only"]) == "/only"
+    assert lq.log_group_from_row({}, ["a", "b"]) is None
+    client = MagicMock()
+    ms = int(at.timestamp() * 1000)
+    client.get_log_events.return_value = {"events": [
+        {"timestamp": ms, "message": "Traceback (most recent call last):\n"},
+        {"timestamp": ms + 1, "message": "IntegrityError: duplicate key\n"}]}
+    lines = lq.get_context(client, "/ecs/ims-api", "web/1", at)
+    assert [l["message"] for l in lines] == ["Traceback (most recent call last):", "IntegrityError: duplicate key"]
+    assert lines[0]["time"] == "2026-11-01 09:10:02.551"
+    kw = client.get_log_events.call_args.kwargs
+    assert kw["logStreamName"] == "web/1" and kw["startTime"] == ms - 5000 and kw["startFromHead"] is True
+
+
+def test_crash_search_matches_exception_lines_only():
+    import re
+    ims = lq.load_config(ROOT / "config.yaml")["sources"]["ims"]
+    q = ims["saved_queries"]["Crashes (exception lines)"]
+    rx = re.compile(re.search(r"like /(.*)/\n", q).group(1))
+    assert rx.search("django.db.utils.IntegrityError: duplicate key value violates unique constraint")
+    assert rx.search("KeyError: 'sku'")
+    assert rx.search("ConnectionResetError")
+    assert not rx.search("Traceback (most recent call last):")
+    assert not rx.search('  File "/usr/src/app.py", line 3, in f')
+    assert not rx.search("[2026-11-01 09:10:02,551: INFO/MainProcess] no Error: here")
+
+
+def test_merge_upgrades_unedited_base_query():
+    bundled = lq.load_config(ROOT / "config.yaml")
+    old_base = next(iter(v for v in lq.OLD_DEFAULT_VALUES["base_query"] if "Stream" in v))
+    user = {"sources": {"ims": {"log_groups": ["/ecs/real"], "base_query": old_base,
+                                "display": "Timestamp, Level, Process, Message, Stream, @message"}}}
+    ims = lq.merge_defaults(user, bundled)["sources"]["ims"]
+    assert "@log" in ims["base_query"] and "@log" in ims["display"]
+    user = {"sources": {"ims": {"log_groups": ["/ecs/real"], "base_query": "fields mine"}}}
+    assert lq.merge_defaults(user, bundled)["sources"]["ims"]["base_query"] == "fields mine"
