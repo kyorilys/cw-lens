@@ -20,7 +20,7 @@ sources:
         mail.source as From, mail.commonHeaders.to.0 as To,
         mail.commonHeaders.subject as Subject, mail.messageId as MessageId
       | parse @message /(?<CC>(?<="name":"Cc","value":").+?(?="))/
-    display: Timestamp, Event, Reason, From, To, CC, Subject, MessageId, @logStream, @message
+    display: Timestamp, Event, Reason, From, To, CC, Subject, MessageId, @logStream, @log, @message
     sort_by: Timestamp
     # Choices in the "Level" box for this source
     levels:
@@ -68,10 +68,10 @@ sources:
     # Level / Process / Message; lines in other formats (e.g. traceback
     # lines) keep their full text as the Message.
     base_query: |
-      fields @timestamp as Timestamp, @logStream as Stream
+      fields @timestamp as Timestamp, @logStream as Stream, @log
       | parse @message /^\[(?<LogTime>[^\]]+?): (?<Level>[A-Z]+)\/(?<Process>[^\]]+)\] (?<Msg>.*)/
       | fields coalesce(Msg, @message) as Message
-    display: Timestamp, Level, Process, Message, Stream, @message
+    display: Timestamp, Level, Process, Message, Stream, @log, @message
     sort_by: Timestamp
     levels:
       Errors: Level in ["ERROR", "CRITICAL"]
@@ -97,9 +97,12 @@ sources:
         | stats count(*) as Count by Message
         | sort Count desc
         | limit 50
-      Crashes & tracebacks: |
+      # Tracebacks are split into one line per log event; this finds the last
+      # line, which names the error (e.g. "IntegrityError: duplicate key ...").
+      # Click a result to see the whole traceback around it.
+      Crashes (exception lines): |
         {base}
-        | filter @message like /Traceback \(most recent call last\)|\b[A-Za-z]+(Error|Exception): /
+        | filter @message like /^\s*[A-Za-z_][\w.]*(Error|Exception)(: |$)/
         | display {display}
         | sort Timestamp desc
         | limit 1000

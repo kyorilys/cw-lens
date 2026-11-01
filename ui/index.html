@@ -216,6 +216,15 @@ mark { background: var(--mark); color: var(--mark-text); border-radius: 3px; pad
 .kv dd .copy svg { width: 13px; height: 13px; }
 .raw-head { display: flex; align-items: center; justify-content: space-between; margin: 16px 0 6px;
             color: var(--faint); font-size: 11.5px; text-transform: uppercase; letter-spacing: .04em; font-weight: 560; }
+.ctx { margin-top: 0; border: 1px solid var(--border); border-radius: 8px; background: var(--bg);
+       font: 12px/1.5 var(--mono); max-height: 420px; overflow: auto; }
+.ctx-line { display: grid; grid-template-columns: 92px 1fr; gap: 8px; padding: 1px 10px; }
+.ctx-line .t { color: var(--faint); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ctx-line .m { white-space: pre-wrap; overflow-wrap: anywhere; }
+.ctx-line.hit { background: var(--accent-soft); color: var(--accent-text); }
+.ctx-line.exc .m { color: var(--b-red); font-weight: 600; }
+.ctx-status { padding: 10px 12px; color: var(--muted); font-family: inherit; font-size: 12.5px; }
+.ctx-status .btn { margin-top: 6px; }
 pre.raw { margin: 0; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px;
           font: 12px/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 
@@ -555,7 +564,7 @@ function openDetails(i) {
   const body = $("detailsBody"); body.replaceChildren();
   const kv = el("dl", { class: "kv" });
   for (const [k, v] of Object.entries(r)) {
-    if (k === "@message" || k === "@ptr" || v === "" || v == null) continue;
+    if (k === "@message" || k === "@ptr" || k === "@log" || v === "" || v == null) continue;
     kv.append(el("dt", {}, COL_TITLE[k] || k),
       el("dd", {}, withHighlight(v, S.highlight), el("button", { class: "copy", title: "Copy", html: ICONS.copy, onclick: () => copy(String(v)) })));
   }
@@ -567,7 +576,47 @@ function openDetails(i) {
     const pre = el("pre", { class: "raw" }); pre.append(withHighlight(raw, S.highlight));
     body.append(pre);
   }
+  if (r["@logStream"] || r.Stream) body.append(contextSection(r, i));
   $("details").hidden = false;
+}
+
+// Lines logged just before/after this one in the same stream. Python tracebacks
+// arrive as one CloudWatch event per line, so this shows the whole traceback.
+function contextSection(r, i) {
+  const wrap = el("div");
+  const head = el("div", { class: "raw-head" }, "Surrounding lines");
+  const box = el("div", { class: "ctx" });
+  wrap.append(head, box);
+  const msg = r.Message || r["@message"] || "";
+  const looksLikeError = /^(ERROR|CRITICAL)$/.test(r.Level || "") ||
+    /Traceback \(most recent call last\)|(Error|Exception)(: |$)|^\s*File "/.test(msg);
+  const load = async () => {
+    box.replaceChildren(el("div", { class: "ctx-status" }, el("span", { class: "spinner", style: "display:inline-block;vertical-align:middle" }), "  Loading lines around this one…"));
+    const res = await window.pywebview.api.context(S.source, r);
+    if (S.selected !== i) return;  // user moved on to another row
+    if (res.error) { box.replaceChildren(el("div", { class: "ctx-status" }, res.error)); return; }
+    if (!res.lines.length) { box.replaceChildren(el("div", { class: "ctx-status" }, "No other lines were logged around this one.")); return; }
+    box.replaceChildren();
+    const raw = r["@message"] || "";
+    let hitEl = null;
+    for (const ln of res.lines) {
+      const d = parseTime(ln.time);
+      const hit = ln.message === raw;
+      const exc = /^\s*[A-Za-z_][\w.]*(Error|Exception)(: |$)/.test(ln.message);
+      const row = el("div", { class: "ctx-line" + (hit ? " hit" : "") + (exc ? " exc" : "") },
+        el("span", { class: "t", title: ln.time + " UTC" }, d ? d.toLocaleTimeString(undefined, { hour12: false }) + "." + ln.time.slice(-3) : ""),
+        el("span", { class: "m" }, withHighlight(ln.message, S.highlight)));
+      if (hit && !hitEl) hitEl = row;
+      box.append(row);
+    }
+    head.replaceChildren("Surrounding lines", el("button", { class: "btn ghost", onclick: () => copy(res.lines.map((l) => l.message).join("\n")) },
+      el("span", { html: ICONS.copy, style: "display:grid" }), "Copy all"));
+    if (hitEl) hitEl.scrollIntoView({ block: "nearest" });
+  };
+  if (looksLikeError) load();
+  else box.append(el("div", { class: "ctx-status" }, "See what was logged just before and after this line.",
+    el("div", {}, el("button", { class: "btn", onclick: load }, "Show surrounding lines"))));
+  return wrap;
 }
 function closeDetails() {
   $("details").hidden = true; S.selected = -1;

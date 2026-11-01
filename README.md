@@ -5,7 +5,7 @@ Fast and simple search for AWS CloudWatch logs — built for checking **Email** 
 ## Setup
 1. Install Python 3.10+ (on Windows/Mac from python.org — it includes Tkinter), then `pip install -r requirements.txt`
 2. Make sure AWS credentials work (`aws configure` or `aws sso login`).
-   The user/role needs `logs:StartQuery`, `logs:GetQueryResults`, `logs:StopQuery`, `logs:DescribeLogGroups`.
+   The user/role needs `logs:StartQuery`, `logs:GetQueryResults`, `logs:StopQuery`, `logs:GetLogEvents`, `logs:DescribeLogGroups`.
 3. Edit `config.yaml`: set your region and the real log group names for `email` and `ims`.
    Not sure of the names? Run `python cli.py groups` to list them.
 
@@ -50,6 +50,10 @@ cw-lens splits these into **Level**, **Process** and **Message**.
   timeouts, background task errors, errors per 5 minutes.
 - The first time, click **Choose log groups** and pick the IMS log groups (try filtering for
   `ims`, `warehouse`, `ecs`, `elasticbeanstalk` or `apprunner`).
+- Python errors are split into one CloudWatch line each, so a result like `Traceback (most recent call last):`
+  says little on its own. Click it: the details panel loads the **surrounding lines** from the same
+  log stream, so you see the whole traceback with the actual error (e.g. `IntegrityError: ...`) in red.
+  **Crashes (exception lines)** finds those final error lines directly.
 - IMS also keeps errors (with full tracebacks) and request logs in its own database
   (`ErrorLog`, `RequestLog`); those are not in CloudWatch.
 

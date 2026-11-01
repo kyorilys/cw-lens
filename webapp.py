@@ -107,6 +107,22 @@ class Api:
         return {"rows": rows, "query": query, "seconds": round(time.monotonic() - began, 1),
                 "start": start.isoformat(), "end": end.isoformat()}
 
+    def context(self, source: str, row: dict) -> dict:
+        """Lines logged around a result row in the same log stream (whole tracebacks)."""
+        stream = row.get("@logStream") or row.get("Stream")
+        when = row.get("@timestamp") or row.get("Timestamp")
+        if not stream or not when:
+            return {"error": "This result has no log stream or time, so there is nothing around it to show."}
+        group = lq.log_group_from_row(row, self._groups(source))
+        if not group:
+            return {"error": "Can't tell which log group this line came from. Run the search again "
+                             "(newer searches include it) or search one log group at a time."}
+        try:
+            lines = lq.get_context(self._client(), group, stream, lq.parse_insights_time(when))
+        except Exception as e:  # noqa: BLE001 - shown in the UI
+            return {"error": lq.friendly_error(e)}
+        return {"lines": lines, "group": group, "stream": stream}
+
     def list_log_groups(self, prefix: str = "") -> dict:
         try:
             return {"groups": lq.list_log_groups(self._client(), prefix, max_items=5000)}
