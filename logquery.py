@@ -33,6 +33,17 @@ USER_CONFIG = Path.home() / ".cloudwatch-log-search" / "config.yaml"
 # Placeholder log groups shipped in the first version of config.yaml.
 OLD_PLACEHOLDERS = {"email": ["/aws/lambda/email-sender"], "ims": ["/ecs/ims-service"]}
 
+# Saved queries shipped in earlier versions. If a user's copy is still exactly
+# one of these (never edited), it's safe to replace or drop it on upgrade.
+OLD_DEFAULT_QUERIES = {
+    'fields @timestamp, @message, @logStream\n| filter @message like /(?i)(error|exception|bounce|complaint|reject|fail)/\n| sort @timestamp desc',
+    'fields @timestamp, @message, @logStream\n| filter @message like /(?i){term}/\n| sort @timestamp desc',
+    'filter @message like /(?i)sent/\n| stats count(*) as sent by bin(1h)\n| sort bin(1h) desc',
+    'fields @timestamp, @message, @logStream\n| filter @message like /(?i)(error|exception|fatal)/\n| sort @timestamp desc',
+    'fields @timestamp, @message, @logStream\n| filter @message like /(?i){term}/\n| sort @timestamp desc',
+    'filter @message like /(?i)error/\n| stats count(*) as errors by bin(5m)\n| sort bin(5m) desc',
+}
+
 
 def load_config(path: str | Path = "config.yaml") -> dict:
     with open(path) as f:
@@ -74,9 +85,12 @@ def merge_defaults(user: dict, bundled: dict) -> dict:
         if not mine or not mine.get("log_groups") or mine["log_groups"] == OLD_PLACEHOLDERS.get(key):
             sources[key] = default
             continue
+        saved = mine.setdefault("saved_queries", {})
+        for name in list(saved):  # drop untouched queries from older versions
+            if saved[name].strip() in OLD_DEFAULT_QUERIES and saved[name] != default.get("saved_queries", {}).get(name):
+                del saved[name]
         for k, v in default.items():
             if k == "saved_queries":
-                saved = mine.setdefault("saved_queries", {})
                 for name, q in v.items():
                     saved.setdefault(name, q)
             else:

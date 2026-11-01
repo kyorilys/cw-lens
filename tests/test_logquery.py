@@ -131,3 +131,51 @@ def test_custom_window():
         lq.custom_window("2026-06-13", "2026-06-09")
     with pytest.raises(ValueError):
         lq.custom_window("13/06/2026", "")
+
+
+def _ims_parse_regex():
+    """The IMS parse pattern from config.yaml, converted to Python syntax."""
+    ims = lq.load_config(ROOT / "config.yaml")["sources"]["ims"]
+    import re
+    pattern = re.search(r"\| parse @message /(.*)/\n", ims["base_query"]).group(1)
+    return re.compile(pattern.replace("(?<", "(?P<"))
+
+
+def test_ims_parse_matches_real_log_format():
+    # Same layout as the "celery" formatter in warehouse_ims/settings.py:
+    #   "[{asctime}: {levelname}/{processName}] {message}"
+    rx = _ims_parse_regex()
+    m = rx.match("[2026-10-21 08:01:02,123: ERROR/MainProcess] Courier API timeout order=SO-88233")
+    assert m.group("Level") == "ERROR" and m.group("Process") == "MainProcess"
+    assert m.group("Msg") == "Courier API timeout order=SO-88233"
+    m = rx.match("[2026-10-21 08:01:02,123: WARNING/ForkPoolWorker-3] Low stock sku=WH-20019")
+    assert m.group("Level") == "WARNING" and m.group("Process") == "ForkPoolWorker-3"
+    assert rx.match('  File "/usr/src/warehouse_ims/views.py", line 12, in post') is None
+
+
+def test_ims_queries():
+    ims = lq.load_config(ROOT / "config.yaml")["sources"]["ims"]
+    assert ims["log_groups"] == []
+    q = lq.build_query("SO-88213", "Errors", 200, ims)
+    assert 'filter Level in ["ERROR", "CRITICAL"]' in q and "| display Timestamp, Level" in q
+    for name, text in ims["saved_queries"].items():
+        filled = lq.fill_template(text, "x", ims)
+        assert "{" not in filled.replace("{term}", ""), name
+
+
+def test_merge_upgrades_untouched_old_ims_queries():
+    # An IMS source as saved by the first version of the app, with real log groups picked
+    old = {"region": "us-east-1", "sources": {"ims": {"label": "IMS", "log_groups": ["/ecs/real-ims"], "saved_queries": {
+        "Recent errors": "fields @timestamp, @message, @logStream\n"
+                         "| filter @message like /(?i)(error|exception|fatal)/\n| sort @timestamp desc\n",
+        "Find by ID / keyword": "fields @timestamp, @message, @logStream\n"
+                                "| filter @message like /(?i){term}/\n| sort @timestamp desc\n",
+        "My own": "fields @message",
+    }}}}
+    out = lq.merge_defaults(old, lq.load_config(ROOT / "config.yaml"))
+    ims = out["sources"]["ims"]
+    assert ims["log_groups"] == ["/ecs/real-ims"]
+    assert "Find by ID / keyword" not in ims["saved_queries"]          # old default dropped
+    assert "Level in" in ims["saved_queries"]["Recent errors"]         # replaced by new version
+    assert ims["saved_queries"]["My own"] == "fields @message"         # user's own kept
+    assert "base_query" in ims and "Errors" in ims["levels"]

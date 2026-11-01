@@ -39,6 +39,20 @@ Time, Event, Reason, From, To, CC, Subject and Message ID.
 - Saved queries: find by address, find by subject, bounces/complaints/rejects, delivery delays,
   event counts per day.
 
+## IMS search
+IMS (the `warehouse_ims` Django app and its Celery workers) prints lines like
+`[2026-10-21 08:01:02,123: ERROR/MainProcess] Courier API timeout ...`.
+cw-lens splits these into **Level**, **Process** and **Message**.
+
+- Search an order number, SKU or error text. **Show** narrows to Errors, Warnings & errors, Info,
+  or Background tasks (Celery workers).
+- Saved searches: recent errors, find by order/SKU/keyword, most common errors, crashes & tracebacks,
+  timeouts, background task errors, errors per 5 minutes.
+- The first time, click **Choose log groups** and pick the IMS log groups (try filtering for
+  `ims`, `warehouse`, `ecs`, `elasticbeanstalk` or `apprunner`).
+- IMS also keeps errors (with full tracebacks) and request logs in its own database
+  (`ErrorLog`, `RequestLog`); those are not in CloudWatch.
+
 ## Web app
 `streamlit run app.py` then open http://localhost:8501
 

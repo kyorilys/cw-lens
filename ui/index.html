@@ -391,7 +391,7 @@ function fmtDay(d) { return d.toLocaleDateString(undefined, { day: "numeric", mo
 // Colour for an SES event type or a log level.
 function badgeClass(v) {
   const s = String(v).toLowerCase();
-  if (/bounce|complaint|reject|failure|error|fatal|exception/.test(s)) return "b-red";
+  if (/bounce|complaint|reject|failure|error|fatal|critical|exception/.test(s)) return "b-red";
   if (/delay|warn/.test(s)) return "b-amber";
   if (/^delivery$|delivered|success/.test(s)) return "b-green";
   if (/send|info/.test(s)) return "b-blue";
@@ -500,12 +500,12 @@ function tableColumns(rows) {
   const all = [...(src().columns || [])].filter((c) => rows.some((r) => c in r));
   for (const r of rows) for (const k of Object.keys(r)) if (!all.includes(k)) all.push(k);
   const friendly = all.filter((c) => !c.startsWith("@"));
-  let cols = all.filter((c) => !["@logStream", "@log", "@ptr", "MessageId"].includes(c));
+  let cols = all.filter((c) => !["@logStream", "@log", "@ptr", "MessageId", "Stream"].includes(c));
   if (friendly.length) cols = cols.filter((c) => c !== "@message");
   const timeCol = cols.find((c) => c === "Timestamp" || c === "@timestamp");
   const rest = cols.filter((c) => c !== timeCol);
   const out = timeCol ? [timeCol] : [];
-  if (!cols.includes("Event") && rows.some((r) => levelOf(r["@message"]))) out.push("__level");
+  if (!cols.includes("Event") && !cols.includes("Level") && rows.some((r) => levelOf(r["@message"]))) out.push("__level");
   return out.concat(rest);
 }
 const COL_TITLE = { "@timestamp": "Time", Timestamp: "Time", "@message": "Message", __level: "Level" };
@@ -524,13 +524,13 @@ function renderTable() {
       if (c === "Timestamp" || c === "@timestamp") {
         const d = parseTime(r[c]);
         tr.append(el("td", { class: "time", title: (r[c] || "") + " UTC" }, d ? fmtTime(d, withYear) : r[c] || ""));
-      } else if (c === "Event") {
+      } else if (c === "Event" || c === "Level") {
         tr.append(el("td", {}, r[c] ? badge(r[c]) : ""));
       } else if (c === "__level") {
         const lv = levelOf(r["@message"]);
         tr.append(el("td", {}, lv ? badge(lv) : ""));
       } else {
-        const td = el("td", { class: c === "@message" ? "msg" : "", title: r[c] || "" });
+        const td = el("td", { class: c === "@message" || c === "Message" ? "msg" : "", title: r[c] || "" });
         td.append(withHighlight(r[c] ?? "", S.highlight));
         tr.append(td);
       }
@@ -546,10 +546,10 @@ function openDetails(i) {
   const r = S.rows[i];
   const d = parseTime(r.Timestamp || r["@timestamp"]);
   const title = $("detailsTitle"); title.replaceChildren();
-  const ev = r.Event || levelOf(r["@message"]);
+  const ev = r.Event || r.Level || levelOf(r["@message"]);
   if (ev) title.append(badge(ev));
   title.append(el("div", { class: "when" }, d ? `${fmtTime(d, true)}  ·  ${(r.Timestamp || r["@timestamp"])} UTC` : ""));
-  const headline = r.Subject || (r["@message"] || "").slice(0, 160);
+  const headline = r.Subject || (r.Message || r["@message"] || "").slice(0, 160);
   if (headline) title.append(el("div", { class: "subject" }, headline));
 
   const body = $("detailsBody"); body.replaceChildren();

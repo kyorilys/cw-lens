@@ -61,16 +61,61 @@ sources:
     label: IMS
     # Not set yet: the app asks you to pick IMS log groups the first time.
     log_groups: []
+    search_hint: order number, SKU or error text
+    # IMS (warehouse_ims Django app + Celery workers) prints lines like
+    #   [2026-10-21 08:01:02,123: ERROR/MainProcess] Courier API timeout ...
+    # (see LOGGING in warehouse_ims/settings.py). This splits them into
+    # Level / Process / Message; lines in other formats (e.g. traceback
+    # lines) keep their full text as the Message.
+    base_query: |
+      fields @timestamp as Timestamp, @logStream as Stream
+      | parse @message /^\[(?<LogTime>[^\]]+?): (?<Level>[A-Z]+)\/(?<Process>[^\]]+)\] (?<Msg>.*)/
+      | fields coalesce(Msg, @message) as Message
+    display: Timestamp, Level, Process, Message, Stream, @message
+    sort_by: Timestamp
+    levels:
+      Errors: Level in ["ERROR", "CRITICAL"]
+      Warnings & errors: Level in ["WARNING", "ERROR", "CRITICAL"]
+      Info: Level = "INFO"
+      Background tasks: Process like /ForkPoolWorker/
     saved_queries:
       Recent errors: |
-        fields @timestamp, @message, @logStream
-        | filter @message like /(?i)(error|exception|fatal)/
-        | sort @timestamp desc
-      Find by ID / keyword: |
-        fields @timestamp, @message, @logStream
+        {base}
+        | filter Level in ["ERROR", "CRITICAL"]
+        | display {display}
+        | sort Timestamp desc
+        | limit 1000
+      Find by order, SKU or keyword: |
+        {base}
         | filter @message like /(?i){term}/
-        | sort @timestamp desc
-      Error count per 5 min: |
-        filter @message like /(?i)error/
-        | stats count(*) as errors by bin(5m)
-        | sort bin(5m) desc
+        | display {display}
+        | sort Timestamp desc
+        | limit 10000
+      Most common errors: |
+        {base}
+        | filter Level in ["ERROR", "CRITICAL"]
+        | stats count(*) as Count by Message
+        | sort Count desc
+        | limit 50
+      Crashes & tracebacks: |
+        {base}
+        | filter @message like /Traceback \(most recent call last\)|\b[A-Za-z]+(Error|Exception): /
+        | display {display}
+        | sort Timestamp desc
+        | limit 1000
+      Timeouts: |
+        {base}
+        | filter @message like /(?i)(timeout|timed out)/
+        | display {display}
+        | sort Timestamp desc
+        | limit 1000
+      Background task errors (Celery): |
+        {base}
+        | filter Process like /ForkPoolWorker/ and Level in ["WARNING", "ERROR", "CRITICAL"]
+        | display {display}
+        | sort Timestamp desc
+        | limit 1000
+      Errors per 5 minutes: |
+        {base}
+        | filter Level in ["ERROR", "CRITICAL"]
+        | stats count(*) as Errors by bin(5m)
